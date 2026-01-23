@@ -17,7 +17,7 @@
     # For example below
     # system-images;android-27;default;x86_64
     # system-images;android-34;default;x86_64
-    platformVersions = ["27" "34" "36"];
+    platformVersions = ["27" "33" "34" "36"];
     abiVersions = ["x86_64"];
     systemImageTypes = ["default"];
 
@@ -69,16 +69,18 @@ pkgs.mkShell {
         deviceName = name;
         platformVersion = "36";
         abiVersion = "x86_64";
-        systemImageType = "default";
+        systemImageType = "google-apis";
         sdkExtraArgs = {
           emulatorVersion = "34.2.11";
         };
         configOptions = {
+          "hw.device.name" = "pixel_9_pro_xl";
           "hw.gpu.enabled" = "yes";
           "hw.gpu.mode" = "host";
           "hw.keyboard" = "yes";
         };
         avdHomeDir = "$HOME/.android/avd";
+        androidAvdFlags = "-d pixel_9_pro_xl";
       }) {})
   ];
   shellHook = ''
@@ -90,6 +92,6 @@ pkgs.mkShell {
     # On wayland may not work correctly without this
     export QT_QPA_PLATFORM="xcb"
     # Fix some kind of errors with vulkan
-    export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib":$LD_LIBRARY_PATH
+    # export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib":$LD_LIBRARY_PATH
   '';
 }

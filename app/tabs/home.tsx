@@ -48,7 +48,6 @@ export default function HomeScreen() {
 
   return (
     <ScrollView>
-      <StarRating rating={3.89} users={123341}></StarRating>
       <ThemedView style={styles.stepContainer}>
         {ongoings.map((obj, i) => (
           <>{OngoingPlate(obj)}</>

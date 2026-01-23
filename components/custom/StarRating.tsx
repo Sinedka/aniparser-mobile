@@ -37,6 +37,8 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: "row",
     alignItems: "center",
+    height: '100%',
+    backgroundColor: 'black',
     gap: 16,
   },
   item: {
