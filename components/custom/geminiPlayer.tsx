@@ -17,6 +17,8 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
+  FadeIn,
+  FadeOut,
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
 
@@ -141,10 +143,39 @@ const YouTubePlayer = () => {
       scheduleOnRN(handleDoubleTap);
     });
 
-  // Стили для анимации
+  // Стили для анимации контролов
   const animatedControlsStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
   }));
+
+  // --- РЕНДЕР ВИЗУАЛИЗАЦИИ ПЕРЕМОТКИ ---
+  const renderSeekOverlay = () => {
+    if (step === 0 || step === 1 || step === -1) return null;
+
+    const isRewind = step < 0;
+    const seconds = Math.abs(step) * 10 - 10;
+
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <Animated.View
+          entering={FadeIn.duration(200)}
+          exiting={FadeOut.duration(200)}
+          style={[
+            styles.seekOverlay,
+            isRewind ? styles.seekOverlayLeft : styles.seekOverlayRight,
+          ]}
+        >
+          <View style={styles.seekContent}>
+            {/* Иконки стрелок */}
+            <Text style={styles.seekIcon}>
+              {isRewind ? '«««' : '»»»'}
+            </Text>
+            <Text style={styles.seekText}>{seconds} секунд</Text>
+          </View>
+        </Animated.View>
+      </View>
+    );
+  };
 
   return (
     <GestureHandlerRootView style={styles.container}>
@@ -153,7 +184,7 @@ const YouTubePlayer = () => {
           ref={videoRef}
           source={{
             uri: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-          }} // Пример видео
+          }}
           style={styles.video}
           resizeMode="contain"
           paused={paused}
@@ -164,6 +195,9 @@ const YouTubePlayer = () => {
           onBuffer={({ isBuffering }) => setIsBuffering(isBuffering)}
           onEnd={() => setPaused(true)}
         />
+
+        {/* Слой визуализации перемотки (под контролами, над видео) */}
+        {renderSeekOverlay()}
 
         {/* Слой жестов (невидим) */}
         <View style={StyleSheet.absoluteFill}>
@@ -187,14 +221,12 @@ const YouTubePlayer = () => {
           style={[styles.controlsOverlay, animatedControlsStyle]}
           pointerEvents="box-none"
         >
-          {/* Индикатор загрузки */}
           {isBuffering && (
             <View style={styles.centerControl}>
               <ActivityIndicator size="large" color="#fff" />
             </View>
           )}
 
-          {/* Кнопка Play/Pause по центру (если не буферизация) */}
           {!isBuffering && (
             <View style={styles.centerControl}>
               <TouchableWithoutFeedback
@@ -204,7 +236,6 @@ const YouTubePlayer = () => {
                 }}
               >
                 <View style={styles.playButton}>
-                  {/* Замените на иконку из react-native-vector-icons */}
                   <Text style={styles.playButtonText}>
                     {paused ? '▶' : '||'}
                   </Text>
@@ -213,7 +244,6 @@ const YouTubePlayer = () => {
             </View>
           )}
 
-          {/* Нижняя панель */}
           <View style={styles.bottomControls}>
             <Text style={styles.timeText}>
               {formatTime(progress.currentTime)}
@@ -224,7 +254,7 @@ const YouTubePlayer = () => {
               minimumValue={0}
               maximumValue={duration}
               value={progress.currentTime}
-              minimumTrackTintColor="#f00" // Красный цвет YouTube
+              minimumTrackTintColor="#f00"
               maximumTrackTintColor="#fff"
               thumbTintColor="#f00"
               onSlidingStart={() => {
@@ -262,24 +292,22 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  // Зоны жестов
   gestureRow: {
     flexDirection: 'row',
     width: '100%',
     height: '100%',
   },
   gestureZone: {
-    flex: 1, // 1/3 экрана слева и справа
+    flex: 1,
     backgroundColor: 'transparent',
   },
   gestureZoneCenter: {
-    flex: 0.5, // Узкая зона по центру, чтобы случайно не сработал дабл-тап
+    flex: 0.5,
     backgroundColor: 'transparent',
   },
-  // UI Контролов
   controlsOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)', // Затенение
+    backgroundColor: 'rgba(0,0,0,0.4)',
     justifyContent: 'space-between',
     zIndex: 10,
   },
@@ -311,8 +339,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: 10,
-    marginTop: 'auto', // Прижать к низу
-    backgroundColor: 'linear-gradient(...)', // Можно добавить градиент для читаемости
+    marginTop: 'auto',
   },
   slider: {
     flex: 1,
@@ -322,10 +349,44 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 12,
   },
-  fullscreenText: {
+
+  // --- СТИЛИ ДЛЯ АНИМАЦИИ ПЕРЕМОТКИ ---
+  seekOverlay: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: '50%', // Половина экрана
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    zIndex: 5,
+  },
+  seekOverlayLeft: {
+    left: 0,
+    borderTopRightRadius: 200, // Создает эффект полукруга
+    borderBottomRightRadius: 200,
+  },
+  seekOverlayRight: {
+    right: 0,
+    borderTopLeftRadius: 200, // Создает эффект полукруга
+    borderBottomLeftRadius: 200,
+  },
+  seekContent: {
+    alignItems: 'center',
+  },
+  seekText: {
     color: 'white',
-    fontSize: 14,
-    marginLeft: 10,
+    fontWeight: 'bold',
+    marginTop: 5,
+    fontSize: 24,
+    textShadowColor: "rgba(0, 0, 0, 0.5)",
+    textShadowOffset: { width: 2, height: 2 },
+    textShadowRadius: 4,
+  },
+  seekIcon: {
+    color: 'white',
+    fontWeight: '900',
+    fontSize: 20,
   },
 });
 
