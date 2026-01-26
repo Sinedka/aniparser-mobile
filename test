@@ -1,0 +1,96 @@
+#!/nix/store/lw117lsr8d585xs63kx5k233impyrq7q-bash-5.3p3/bin/bash -e
+
+# We need a TMPDIR
+if [ "$TMPDIR" = "" ]
+then
+    export TMPDIR=/tmp
+fi
+
+# Store the virtual devices somewhere else, instead of polluting a user's HOME directory
+export ANDROID_USER_HOME=$(mktemp -d $TMPDIR/nix-android-user-home-XXXX)
+
+
+mkdir -p "$HOME/.android/avd"
+export ANDROID_AVD_HOME="$HOME/.android/avd"
+
+
+# We need to specify the location of the Android SDK root folder
+export ANDROID_SDK_ROOT=/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/libexec/android-sdk
+
+# If NIX_ANDROID_AVD_FLAGS is empty
+if [[ -z "$NIX_ANDROID_AVD_FLAGS" ]]; then
+  NIX_ANDROID_AVD_FLAGS="-d pixel_9_pro_xl"
+fi
+
+
+
+
+# We have to look for a free TCP port
+
+echo "Looking for a free TCP port in range 5554-5584" >&2
+
+for i in $(seq 5554 2 5584)
+do
+    if [ -z "$(/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/bin/adb devices | grep emulator-$i)" ]
+    then
+        port=$i
+        break
+    fi
+done
+
+if [ -z "$port" ]
+then
+    echo "Unfortunately, the emulator port space is exhausted!" >&2
+    exit 1
+else
+    echo "We have a free TCP port: $port" >&2
+fi
+
+export ANDROID_SERIAL="emulator-$port"
+
+# Create a virtual android device for testing if it does not exist
+if [ "$(/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/bin/avdmanager list avd | grep 'Name: android-emu-default-api34-x86_64')" = "" ]
+then
+    # Create a virtual android device
+    yes "" | /nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/bin/avdmanager create avd --force -n android-emu-default-api34-x86_64 -k "system-images;android-36;google-apis;x86_64" -p $ANDROID_AVD_HOME/android-emu-default-api34-x86_64.avd $NIX_ANDROID_AVD_FLAGS
+
+    echo "hw.device.name = pixel_9_pro_xl" >> $ANDROID_AVD_HOME/android-emu-default-api34-x86_64.avd/config.ini
+
+echo "hw.gpu.enabled = yes" >> $ANDROID_AVD_HOME/android-emu-default-api34-x86_64.avd/config.ini
+
+echo "hw.gpu.mode = host" >> $ANDROID_AVD_HOME/android-emu-default-api34-x86_64.avd/config.ini
+
+echo "hw.keyboard = yes" >> $ANDROID_AVD_HOME/android-emu-default-api34-x86_64.avd/config.ini
+
+
+    
+fi
+
+# Launch the emulator
+echo "\nLaunch the emulator"
+$ANDROID_SDK_ROOT/emulator/emulator -avd android-emu-default-api34-x86_64 -no-boot-anim -port $port $NIX_ANDROID_EMULATOR_FLAGS &
+
+# Wait until the device has completely booted
+echo "Waiting until the emulator has booted the android-emu-default-api34-x86_64 and the package manager is ready..." >&2
+
+/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/libexec/android-sdk/platform-tools/adb -s emulator-$port wait-for-device
+
+echo "Device state has been reached" >&2
+
+while [ -z "$(/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/libexec/android-sdk/platform-tools/adb -s emulator-$port shell getprop dev.bootcomplete | grep 1)" ]
+do
+    sleep 5
+done
+
+echo "dev.bootcomplete property is 1" >&2
+
+#while [ -z "$(/nix/store/2zqljjcnam2dd7dnsb6mjw07yhwj0lki-androidsdk/libexec/android-sdk/platform-tools/adb -s emulator-$port shell getprop sys.boot_completed | grep 1)" ]
+#do
+    #sleep 5
+#done
+
+#echo "sys.boot_completed property is 1" >&2
+
+echo "ready" >&2
+
+

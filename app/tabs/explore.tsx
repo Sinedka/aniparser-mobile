@@ -7,6 +7,7 @@ import { ThemedView } from '../../components/themed-view';
 import SearchInput from '../../components/themed-text-input';
 import { useState, useEffect } from 'react';
 import AnimePlate from '../../components/custom/AnimePlate';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function ExploreScreen() {
   const [searchRes, setSearchRes] = useState<Search[]>([]);
@@ -29,6 +30,7 @@ export default function ExploreScreen() {
   }, [text]);
 
   return (
+    <SafeAreaView>
     <ThemedView>
       <ThemedView style={styles.container}>
         <SearchInput onSubmitEditing={t => SetText(t)} />
@@ -39,6 +41,7 @@ export default function ExploreScreen() {
         ))}
       </ScrollView>
     </ThemedView>
+    </SafeAreaView>
   );
 }
 

@@ -19,7 +19,7 @@
     # system-images;android-34;default;x86_64
     platformVersions = ["27" "33" "34" "36"];
     abiVersions = ["x86_64"];
-    systemImageTypes = ["default"];
+    systemImageTypes = ["google_apis_playstore"];
 
     includeSources = false; 
     includeNDK = true;
@@ -61,7 +61,9 @@ pkgs.mkShell {
     # You also can temporary configure overlayFS and use them
 
     # android-studio
+    dotslash
     androidSdk
+    react-native-debugger
     jdk17
     (callPackage ({ pkgs, ... }:
       pkgs.androidenv.emulateApp rec {
@@ -69,18 +71,18 @@ pkgs.mkShell {
         deviceName = name;
         platformVersion = "36";
         abiVersion = "x86_64";
-        systemImageType = "google-apis";
+        systemImageType = "google_apis_playstore";
         sdkExtraArgs = {
           emulatorVersion = "34.2.11";
         };
         configOptions = {
-          "hw.device.name" = "pixel_9_pro_xl";
-          "hw.gpu.enabled" = "yes";
-          "hw.gpu.mode" = "host";
+          "hw.device.name" = "pixel_8";
+          # "hw.gpu.enabled" = "yes";
+          # "hw.gpu.mode" = "host";
           "hw.keyboard" = "yes";
         };
         avdHomeDir = "$HOME/.android/avd";
-        androidAvdFlags = "-d pixel_9_pro_xl";
+        # androidAvdFlags = "--device 42";
       }) {})
   ];
   shellHook = ''
@@ -92,6 +94,5 @@ pkgs.mkShell {
     # On wayland may not work correctly without this
     export QT_QPA_PLATFORM="xcb"
     # Fix some kind of errors with vulkan
-    # export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib":$LD_LIBRARY_PATH
   '';
 }
