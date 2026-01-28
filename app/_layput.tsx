@@ -23,6 +23,7 @@ const PlayerDrawer = createDrawerNavigator({
     headerShown: false,
     drawerPosition: 'right',
     drawerType: 'front',
+    swipeEnabled: false,
   },
 });
 

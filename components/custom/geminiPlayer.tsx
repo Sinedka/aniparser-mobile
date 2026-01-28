@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import { Ionicons } from '@react-native-vector-icons/ionicons';
 import { Video as VideoType } from '../../services/api/source/Yumme_anime_ru';
 import {
@@ -6,8 +6,11 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
+  BackHandler,
   TouchableWithoutFeedback,
   TouchableOpacity,
+  useWindowDimensions,
+  ScrollView,
 } from 'react-native';
 import Video, { VideoRef } from 'react-native-video';
 import Slider from '@react-native-community/slider';
@@ -24,7 +27,6 @@ import Animated, {
   FadeOut,
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
-import { toGammaSpace } from 'react-native-reanimated/lib/typescript/Colors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 
@@ -52,6 +54,7 @@ const VideoPlayer = ({
   const videoRef = useRef<VideoRef>(null);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Состояние плеера
@@ -65,14 +68,48 @@ const VideoPlayer = ({
   const [isBuffering, setIsBuffering] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
   const [url, setUrl] = useState('');
+  const [sources, setSources] = useState<{ title: string; url: string }[]>([]);
+  const [selectedQualityUrl, setSelectedQualityUrl] = useState<string | null>(
+    null
+  );
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<
+    'main' | 'speed' | 'quality'
+  >('main');
   const lastProgressRef = useRef(0);
   const pendingSeekRef = useRef<'reset' | 'back10' | null>(null);
+  const pendingSeekTimeRef = useRef<number | null>(null);
+
+  const settingsProgress = useSharedValue(0);
+  const settingsSheetHeight = Math.max(0, screenHeight * 0.7);
+  const settingsOffset = insets.bottom + 16;
+
+  const orderedSources = useMemo(() => {
+    return [...sources].sort((a, b) => {
+      const aNum = Number(a.title);
+      const bNum = Number(b.title);
+      if (Number.isNaN(aNum) || Number.isNaN(bNum)) return 0;
+      return bNum - aNum;
+    });
+  }, [sources]);
+  const selectedSource = useMemo(() => {
+    if (!selectedQualityUrl) return sources[0];
+    return sources.find(source => source.url === selectedQualityUrl) || sources[0];
+  }, [sources, selectedQualityUrl]);
 
   useEffect(() => {
     if (!video) return;
     console.log(video);
     setIsBuffering(true);
-    video.getSources().then(v => setUrl(v[0].url));
+    video.getSources().then(v => {
+      setSources(v);
+      const firstSource = v[0];
+      if (firstSource) {
+        setSelectedQualityUrl(firstSource.url);
+        setUrl(firstSource.url);
+      }
+    });
   }, [video]);
 
   useEffect(() => {
@@ -83,6 +120,33 @@ const VideoPlayer = ({
   useEffect(() => {
     console.log(url);
   }, [url]);
+
+  useEffect(() => {
+    settingsProgress.value = withTiming(isSettingsOpen ? 1 : 0, {
+      duration: 240,
+    });
+    if (isSettingsOpen) {
+      opacity.value = withTiming(1, { duration: 200 });
+      if (controlsTimeout.current) clearTimeout(controlsTimeout.current);
+    }
+  }, [isSettingsOpen, opacity, settingsProgress]);
+
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        if (!isSettingsOpen) return false;
+        if (settingsPage !== 'main') {
+          setSettingsPage('main');
+          return true;
+        }
+        setIsSettingsOpen(false);
+        return true;
+      }
+    );
+
+    return () => backHandler.remove();
+  }, [isSettingsOpen, settingsPage]);
 
   // Отслеживаем состояние drawer
   useEffect(() => {
@@ -112,7 +176,7 @@ const VideoPlayer = ({
     opacity.value = withTiming(1, { duration: 200 });
     if (controlsTimeout.current) clearTimeout(controlsTimeout.current);
 
-    if (!paused) {
+    if (!paused && !isSettingsOpen) {
       controlsTimeout.current = setTimeout(() => {
         opacity.value = withTiming(0, { duration: 500 });
       }, 3000); // Скрыть через 3 сек
@@ -208,6 +272,18 @@ const VideoPlayer = ({
     opacity: opacity.value,
   }));
 
+  const animatedSettingsOverlayStyle = useAnimatedStyle(() => ({
+    opacity: settingsProgress.value,
+  }));
+
+  const animatedSettingsSheetStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateY: (1 - settingsProgress.value) * (settingsSheetHeight + settingsOffset),
+      },
+    ],
+  }));
+
   // --- РЕНДЕР ВИЗУАЛИЗАЦИИ ПЕРЕМОТКИ ---
   const renderSeekOverlay = () => {
     if (step === 0 || step === 1 || step === -1) return null;
@@ -247,8 +323,19 @@ const VideoPlayer = ({
             style={styles.video}
             resizeMode="contain"
             paused={paused}
+            rate={playbackRate}
             onLoad={data => {
               setDuration(data.duration);
+              if (pendingSeekTimeRef.current !== null) {
+                videoRef.current?.seek(pendingSeekTimeRef.current);
+                setProgress(prev => ({
+                  ...prev,
+                  currentTime: pendingSeekTimeRef.current || 0,
+                }));
+                pendingSeekTimeRef.current = null;
+                pendingSeekRef.current = null;
+                return;
+              }
               const pendingSeek = pendingSeekRef.current;
 
               if (pendingSeek === 'reset') {
@@ -363,6 +450,18 @@ const VideoPlayer = ({
             >
               <TouchableOpacity
                 style={styles.button}
+                onPress={() => {
+                  setIsSettingsOpen(true);
+                  setSettingsPage('main');
+                  showControls();
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="settings-outline" size={24} color="#fff" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.button}
                 onPress={openPlayer}
                 activeOpacity={0.7}
               >
@@ -386,6 +485,134 @@ const VideoPlayer = ({
               </TouchableOpacity>
             </View>
           </View>
+        </Animated.View>
+
+        <Animated.View
+          style={[styles.settingsOverlay, animatedSettingsOverlayStyle]}
+          pointerEvents={isSettingsOpen ? 'auto' : 'none'}
+        >
+          <TouchableWithoutFeedback
+            onPress={() => setIsSettingsOpen(false)}
+          >
+            <View style={styles.settingsBackdrop} />
+          </TouchableWithoutFeedback>
+          <Animated.View
+            style={[
+              styles.settingsSheet,
+              {
+                height: settingsSheetHeight,
+                marginBottom: settingsOffset,
+              },
+              animatedSettingsSheetStyle,
+            ]}
+          >
+            <View style={styles.settingsHeader}>
+              {settingsPage !== 'main' && (
+                <TouchableOpacity
+                  style={styles.settingsBackButton}
+                  onPress={() => setSettingsPage('main')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="chevron-back" size={20} color="#fff" />
+                </TouchableOpacity>
+              )}
+              <Text style={styles.settingsTitle}>
+                {settingsPage === 'main' && 'Настройки'}
+                {settingsPage === 'speed' && 'Скорость'}
+                {settingsPage === 'quality' && 'Качество'}
+              </Text>
+            </View>
+
+            {settingsPage === 'main' && (
+              <ScrollView
+                contentContainerStyle={styles.settingsList}
+                showsVerticalScrollIndicator={false}
+              >
+                <TouchableOpacity
+                  style={styles.settingsItem}
+                  onPress={() => setSettingsPage('speed')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.settingsItemText}>Скорость</Text>
+                  <Text style={styles.settingsValueText}>{playbackRate}x</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.settingsItem}
+                  onPress={() => setSettingsPage('quality')}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.settingsItemText}>Качество</Text>
+                  <Text style={styles.settingsValueText}>
+                    {selectedSource?.title || 'Авто'}
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+
+            {settingsPage === 'speed' && (
+              <ScrollView
+                contentContainerStyle={styles.settingsList}
+                showsVerticalScrollIndicator={false}
+              >
+                {[0.25, 0.5, 1, 1.5, 2].map(rate => (
+                  <TouchableOpacity
+                    key={rate}
+                    style={[
+                      styles.settingsItem,
+                      playbackRate === rate && styles.settingsItemActive,
+                    ]}
+                    onPress={() => {
+                      setPlaybackRate(rate);
+                      setSettingsPage('main');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.settingsItemText}>{rate}x</Text>
+                    {playbackRate === rate && (
+                      <Ionicons name="checkmark" size={18} color="#1ed760" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            {settingsPage === 'quality' && (
+              <ScrollView
+                contentContainerStyle={styles.settingsList}
+                showsVerticalScrollIndicator={false}
+              >
+                {orderedSources.length === 0 && (
+                  <Text style={styles.settingsEmptyText}>
+                    Нет доступных качеств
+                  </Text>
+                )}
+                {orderedSources.map(source => (
+                  <TouchableOpacity
+                    key={`${source.title}-${source.url}`}
+                    style={[
+                      styles.settingsItem,
+                      selectedSource?.url === source.url &&
+                        styles.settingsItemActive,
+                    ]}
+                    onPress={() => {
+                      setSelectedQualityUrl(source.url);
+                      pendingSeekTimeRef.current = progress.currentTime;
+                      setUrl(source.url);
+                      setSettingsPage('main');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.settingsItemText}>
+                      {source.title}
+                    </Text>
+                    {selectedSource?.url === source.url && (
+                      <Ionicons name="checkmark" size={18} color="#1ed760" />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </Animated.View>
         </Animated.View>
       </View>
     </GestureHandlerRootView>
@@ -522,6 +749,70 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  settingsOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 20,
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  settingsBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+  },
+  settingsSheet: {
+    width: '50%',
+    backgroundColor: '#141414',
+    borderRadius: 18,
+    padding: 16,
+    zIndex: 25,
+  },
+  settingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  settingsBackButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  settingsTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  settingsList: {
+    gap: 12,
+  },
+  settingsItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  settingsItemActive: {
+    backgroundColor: 'rgba(30, 215, 96, 0.16)',
+  },
+  settingsItemText: {
+    color: '#fff',
+    fontSize: 16,
+  },
+  settingsValueText: {
+    color: '#c7c7c7',
+    fontSize: 14,
+  },
+  settingsEmptyText: {
+    color: '#9e9e9e',
+    textAlign: 'center',
+    paddingVertical: 16,
   },
 });
 
