@@ -6,11 +6,25 @@ import {
   ThemeProvider,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createDrawerNavigator } from '@react-navigation/drawer';
 import { useColorScheme } from '../hooks/use-color-scheme';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import TabLayout from './tabs/_layout';
 import AnimePage from './anime';
 import VidePlayerScreen from './player';
+import PlayerSidePanel from './playerSidePanel';
+
+const PlayerDrawer = createDrawerNavigator({
+  screens: {
+    Player: VidePlayerScreen,
+  },
+  drawerContent: (props) => <PlayerSidePanel {...props} />,
+  screenOptions: {
+    headerShown: false,
+    drawerPosition: 'right',
+    drawerType: 'front',
+  },
+});
 
 const RootStack = createNativeStackNavigator({
   initialRouteName: 'tabs',
@@ -25,7 +39,7 @@ const RootStack = createNativeStackNavigator({
       screen: AnimePage,
     },
     player: {
-      screen: VidePlayerScreen,
+      screen: PlayerDrawer,
     }
   },
 });

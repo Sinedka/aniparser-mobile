@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { Ionicons } from '@react-native-vector-icons/ionicons';
+import { Video as VideoType } from '../../services/api/source/Yumme_anime_ru';
 import {
   View,
   Text,
   StyleSheet,
   ActivityIndicator,
   TouchableWithoutFeedback,
+  TouchableOpacity,
 } from 'react-native';
 import Video, { VideoRef } from 'react-native-video';
 import Slider from '@react-native-community/slider';
@@ -21,6 +24,9 @@ import Animated, {
   FadeOut,
 } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
+import { toGammaSpace } from 'react-native-reanimated/lib/typescript/Colors';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 
 // Хелпер для форматирования времени (MM:SS)
 const formatTime = (seconds: number) => {
@@ -29,8 +35,24 @@ const formatTime = (seconds: number) => {
   return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 };
 
-const YouTubePlayer = () => {
+type VideoPlayerProps = {
+  openDubber: () => void;
+  openPlayer: () => void;
+  openEpisode: () => void;
+  video: VideoType | undefined;
+  seekBehavior: 'reset' | 'back10';
+};
+const VideoPlayer = ({
+  openDubber,
+  openPlayer,
+  openEpisode,
+  video,
+  seekBehavior,
+}: VideoPlayerProps) => {
   const videoRef = useRef<VideoRef>(null);
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Состояние плеера
   const [paused, setPaused] = useState(false);
@@ -42,6 +64,44 @@ const YouTubePlayer = () => {
   const [duration, setDuration] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
+  const [url, setUrl] = useState('');
+  const lastProgressRef = useRef(0);
+  const pendingSeekRef = useRef<'reset' | 'back10' | null>(null);
+
+  useEffect(() => {
+    if (!video) return;
+    console.log(video);
+    setIsBuffering(true);
+    video.getSources().then(v => setUrl(v[0].url));
+  }, [video]);
+
+  useEffect(() => {
+    if (!video) return;
+    pendingSeekRef.current = seekBehavior;
+  }, [video, seekBehavior]);
+
+  useEffect(() => {
+    console.log(url);
+  }, [url]);
+
+  // Отслеживаем состояние drawer
+  useEffect(() => {
+    const checkDrawerState = () => {
+      const drawerState = navigation.getParent()?.getState();
+      if (drawerState) {
+        const currentRoute = drawerState.routes[drawerState.index];
+        const isOpen = currentRoute?.name === 'Panel';
+        setIsDrawerOpen(isOpen || false);
+      }
+    };
+
+    checkDrawerState();
+    
+    // Слушаем изменения состояния навигации
+    const unsubscribe = navigation.addListener('state', checkDrawerState);
+    
+    return unsubscribe;
+  }, [navigation]);
 
   // Анимация прозрачности контролов
   const opacity = useSharedValue(1);
@@ -167,9 +227,7 @@ const YouTubePlayer = () => {
         >
           <View style={styles.seekContent}>
             {/* Иконки стрелок */}
-            <Text style={styles.seekIcon}>
-              {isRewind ? '«««' : '»»»'}
-            </Text>
+            <Text style={styles.seekIcon}>{isRewind ? '«««' : '»»»'}</Text>
             <Text style={styles.seekText}>{seconds} секунд</Text>
           </View>
         </Animated.View>
@@ -180,21 +238,44 @@ const YouTubePlayer = () => {
   return (
     <GestureHandlerRootView style={styles.container}>
       <View style={styles.videoContainer}>
-        <Video
-          ref={videoRef}
-          source={{
-            uri: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-          }}
-          style={styles.video}
-          resizeMode="contain"
-          paused={paused}
-          onLoad={data => setDuration(data.duration)}
-          onProgress={data => {
-            if (!isSeeking) setProgress(data);
-          }}
-          onBuffer={({ isBuffering }) => setIsBuffering(isBuffering)}
-          onEnd={() => setPaused(true)}
-        />
+        {url && (
+          <Video
+            ref={videoRef}
+            source={{
+              uri: url,
+            }}
+            style={styles.video}
+            resizeMode="contain"
+            paused={paused}
+            onLoad={data => {
+              setDuration(data.duration);
+              const pendingSeek = pendingSeekRef.current;
+
+              if (pendingSeek === 'reset') {
+                videoRef.current?.seek(0);
+                setProgress(prev => ({
+                  ...prev,
+                  currentTime: 0,
+                }));
+              } else if (pendingSeek === 'back10') {
+                const targetTime = Math.max(lastProgressRef.current - 10, 0);
+                videoRef.current?.seek(targetTime);
+                setProgress(prev => ({
+                  ...prev,
+                  currentTime: targetTime,
+                }));
+              }
+
+              pendingSeekRef.current = null;
+            }}
+            onProgress={data => {
+              lastProgressRef.current = data.currentTime;
+              if (!isSeeking) setProgress(data);
+            }}
+            onBuffer={({ isBuffering }) => setIsBuffering(isBuffering)}
+            onEnd={() => setPaused(true)}
+          />
+        )}
 
         {/* Слой визуализации перемотки (под контролами, над видео) */}
         {renderSeekOverlay()}
@@ -235,41 +316,75 @@ const YouTubePlayer = () => {
                   showControls();
                 }}
               >
-                <View style={styles.playButton}>
-                  <Text style={styles.playButtonText}>
-                    {paused ? '▶' : '||'}
-                  </Text>
+                <View
+                  style={[styles.playButton, { paddingLeft: paused ? 5 : 0 }]}
+                >
+                  {paused ? (
+                    <Ionicons name="play-outline" size={40} color="#ffffff" />
+                  ) : (
+                    <Ionicons name="pause-outline" size={40} color="#ffffff" />
+                  )}
                 </View>
               </TouchableWithoutFeedback>
             </View>
           )}
 
-          <View style={styles.bottomControls}>
-            <Text style={styles.timeText}>
-              {formatTime(progress.currentTime)}
-            </Text>
+          <View style={[styles.bottomBar, { paddingBottom: insets.bottom + 8 }]}>
+            <View style={styles.bottomControls}>
+              <Text style={styles.timeText}>
+                {formatTime(progress.currentTime)}
+              </Text>
 
-            <Slider
-              style={styles.slider}
-              minimumValue={0}
-              maximumValue={duration}
-              value={progress.currentTime}
-              minimumTrackTintColor="#f00"
-              maximumTrackTintColor="#fff"
-              thumbTintColor="#f00"
-              onSlidingStart={() => {
-                setIsSeeking(true);
-                if (controlsTimeout.current)
-                  clearTimeout(controlsTimeout.current);
-              }}
-              onSlidingComplete={val => {
-                videoRef.current?.seek(val);
-                setIsSeeking(false);
-                showControls();
-              }}
-            />
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={duration}
+                value={progress.currentTime}
+                minimumTrackTintColor="#f00"
+                maximumTrackTintColor="#fff"
+                thumbTintColor="#f00"
+                onSlidingStart={() => {
+                  setIsSeeking(true);
+                  if (controlsTimeout.current)
+                    clearTimeout(controlsTimeout.current);
+                }}
+                onSlidingComplete={val => {
+                  videoRef.current?.seek(val);
+                  setIsSeeking(false);
+                  showControls();
+                }}
+              />
 
-            <Text style={styles.timeText}>{formatTime(duration)}</Text>
+              <Text style={styles.timeText}>{formatTime(duration)}</Text>
+            </View>
+
+            <View
+              style={styles.panelButtonsRow}
+            >
+              <TouchableOpacity
+                style={styles.button}
+                onPress={openPlayer}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="hardware-chip-outline" size={24} color="#fff" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.button}
+                onPress={openDubber}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="mic-outline" size={24} color="#fff" />
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={styles.button}
+                onPress={openEpisode}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="list-outline" size={24} color="#fff" />
+              </TouchableOpacity>
+            </View>
           </View>
         </Animated.View>
       </View>
@@ -279,7 +394,8 @@ const YouTubePlayer = () => {
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#000',
     justifyContent: 'center',
   },
@@ -338,7 +454,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 10,
+    marginHorizontal: 50,
+  },
+  bottomBar: {
     marginTop: 'auto',
   },
   slider: {
@@ -379,7 +497,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 5,
     fontSize: 24,
-    textShadowColor: "rgba(0, 0, 0, 0.5)",
+    textShadowColor: 'rgba(0, 0, 0, 0.5)',
     textShadowOffset: { width: 2, height: 2 },
     textShadowRadius: 4,
   },
@@ -388,6 +506,23 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     fontSize: 20,
   },
+  panelButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    gap: 12,
+    marginHorizontal: 50,
+  },
+  button: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
 });
 
-export default YouTubePlayer;
+export default VideoPlayer;

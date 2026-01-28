@@ -31,16 +31,16 @@ export default function ExploreScreen() {
 
   return (
     <SafeAreaView>
-    <ThemedView>
-      <ThemedView style={styles.container}>
-        <SearchInput onSubmitEditing={t => SetText(t)} />
+      <ThemedView>
+        <ThemedView style={styles.container}>
+          <SearchInput onSubmitEditing={t => SetText(t)} />
+        </ThemedView>
+        <ScrollView>
+          {searchRes.map(obj => (
+            <AnimePlate key={obj.searchResult.anime_id} anime={obj} />
+          ))}
+        </ScrollView>
       </ThemedView>
-      <ScrollView>
-        {searchRes.map((obj) => (
-          <>{AnimePlate(obj)}</>
-        ))}
-      </ScrollView>
-    </ThemedView>
     </SafeAreaView>
   );
 }

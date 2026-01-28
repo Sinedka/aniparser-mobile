@@ -23,7 +23,13 @@ export default function AnimePage({ route }: StaticScreenProps<{ id: Number }>) 
 
   function move() {
     if (!animeMin) return;
-    navigation.navigate('player');
+    // Убеждаемся, что animeMin сохранен в store перед переходом
+    useAnimeStore.getState().setAnimeMin(animeMin);
+    // Для drawer navigator параметры передаются для начального экрана Player
+    navigation.navigate('player', {
+      screen: 'Player',
+      params: { id },
+    } as any);
   }
 
   useEffect(() => {
@@ -38,7 +44,7 @@ export default function AnimePage({ route }: StaticScreenProps<{ id: Number }>) 
       .then(data => {
         if (!cancelled) setFull(data);
       })
-      .catch(e => setError(e.message));
+      .catch(e => console.log(e.message));
 
     return () => {
       cancelled = true;

@@ -10,7 +10,11 @@ import { useAnimeStore } from '../../stores/animeStore';
 import { useNavigation } from '@react-navigation/native';
 
 
-export default function AnimePlate(anime: Search) {
+type AnimePlateProps = {
+  anime: Search;
+};
+
+export default function AnimePlate({ anime }: AnimePlateProps) {
   const navigation = useNavigation();
 
   function move() {
