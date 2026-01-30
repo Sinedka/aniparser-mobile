@@ -55,7 +55,6 @@ const VideoPlayer = ({
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
   // Состояние плеера
   const [paused, setPaused] = useState(false);
@@ -63,7 +62,7 @@ const VideoPlayer = ({
     currentTime: 0,
     seekableDuration: 0,
   });
-  const [step, setStep] = useState<number>(0);
+  const [seekOffsetSeconds, setSeekOffsetSeconds] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
@@ -80,6 +79,14 @@ const VideoPlayer = ({
   const lastProgressRef = useRef(0);
   const pendingSeekRef = useRef<'reset' | 'back10' | null>(null);
   const pendingSeekTimeRef = useRef<number | null>(null);
+  const seekAccumulatorRef = useRef(0);
+  const seekTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapCountRef = useRef(0);
+  const lastTapDirRef = useRef<'left' | 'right' | null>(null);
+
+  const SEEK_STEP_SECONDS = 10;
+  const SEEK_DEBOUNCE_MS = 300;
 
   const settingsProgress = useSharedValue(0);
   const settingsSheetHeight = Math.max(0, screenHeight * 0.7);
@@ -104,10 +111,10 @@ const VideoPlayer = ({
     setIsBuffering(true);
     video.getSources().then(v => {
       setSources(v);
-      const firstSource = v[0];
-      if (firstSource) {
-        setSelectedQualityUrl(firstSource.url);
-        setUrl(firstSource.url);
+      const lastSource = v[v.length - 1];
+      if (lastSource) {
+        setSelectedQualityUrl(lastSource.url);
+        setUrl(lastSource.url);
       }
     });
   }, [video]);
@@ -148,25 +155,6 @@ const VideoPlayer = ({
     return () => backHandler.remove();
   }, [isSettingsOpen, settingsPage]);
 
-  // Отслеживаем состояние drawer
-  useEffect(() => {
-    const checkDrawerState = () => {
-      const drawerState = navigation.getParent()?.getState();
-      if (drawerState) {
-        const currentRoute = drawerState.routes[drawerState.index];
-        const isOpen = currentRoute?.name === 'Panel';
-        setIsDrawerOpen(isOpen || false);
-      }
-    };
-
-    checkDrawerState();
-    
-    // Слушаем изменения состояния навигации
-    const unsubscribe = navigation.addListener('state', checkDrawerState);
-    
-    return unsubscribe;
-  }, [navigation]);
-
   // Анимация прозрачности контролов
   const opacity = useSharedValue(1);
   const controlsTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -187,89 +175,148 @@ const VideoPlayer = ({
     showControls();
     return () => {
       if (controlsTimeout.current) clearTimeout(controlsTimeout.current);
+      if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
+      if (tapResetTimeoutRef.current) clearTimeout(tapResetTimeoutRef.current);
     };
   }, [paused]);
 
-  // Логика перемотки (Double Tap)
-  const handleDoubleTap = () => {
-    const seekTime = (step + (step > 0 ? -1 : 1)) * 10;
-    if (seekTime === 0) {
-      setStep(0);
-      return;
+  const resetTapSequence = () => {
+    tapCountRef.current = 0;
+    lastTapDirRef.current = null;
+    if (tapResetTimeoutRef.current) {
+      clearTimeout(tapResetTimeoutRef.current);
+      tapResetTimeoutRef.current = null;
     }
-    let newTime = progress.currentTime + seekTime;
+  };
 
-    // Ограничиваем время
+  const cancelPendingSeek = () => {
+    if (seekTimeoutRef.current) {
+      clearTimeout(seekTimeoutRef.current);
+      seekTimeoutRef.current = null;
+    }
+    seekAccumulatorRef.current = 0;
+    setSeekOffsetSeconds(0);
+  };
+
+  // Логика перемотки (Tap) с накоплением
+  const commitSeek = () => {
+    const offset = seekAccumulatorRef.current;
+    if (!offset) return;
+
+    let newTime = progress.currentTime + offset;
     if (newTime < 0) newTime = 0;
     if (newTime > duration) newTime = duration;
 
     videoRef.current?.seek(newTime);
-    showControls(); // Показать контролы при взаимодействии
-    setStep(0);
+    setProgress(prev => ({
+      ...prev,
+      currentTime: newTime,
+    }));
+    seekAccumulatorRef.current = 0;
+    setSeekOffsetSeconds(0);
+    resetTapSequence();
+    showControls();
   };
 
-  // Жесты
-  const singleTap = Gesture.Tap().onEnd(() => {
-    // Переключаем видимость контролов или ставим паузу
-    if (opacity.value === 0) {
-      scheduleOnRN(showControls);
-    } else {
-      // Если контролы видны, тап по пустому месту может их скрыть
-      opacity.value = withTiming(0);
+  const enqueueSeek = (deltaSeconds: number) => {
+    seekAccumulatorRef.current += deltaSeconds;
+    setSeekOffsetSeconds(seekAccumulatorRef.current);
+
+    if (seekTimeoutRef.current) clearTimeout(seekTimeoutRef.current);
+    seekTimeoutRef.current = setTimeout(() => {
+      commitSeek();
+    }, SEEK_DEBOUNCE_MS);
+  };
+
+  const handleTapLeft = () => {
+    if (lastTapDirRef.current && lastTapDirRef.current !== 'left') {
+      cancelPendingSeek();
+      resetTapSequence();
     }
-  });
+    lastTapDirRef.current = 'left';
+    tapCountRef.current += 1;
+    if (tapResetTimeoutRef.current) {
+      clearTimeout(tapResetTimeoutRef.current);
+      tapResetTimeoutRef.current = null;
+    }
 
-  const StepFor = () => {
-    setStep(step + 1);
+    if (seekOffsetSeconds === 0) {
+      if (opacity.value === 0) {
+        showControls();
+      } else {
+        opacity.value = withTiming(0);
+      }
+    } else {
+      if (opacity.value !== 0) {
+        opacity.value = withTiming(0);
+      }
+    }
+    if (tapCountRef.current >= 2) {
+      enqueueSeek(-SEEK_STEP_SECONDS);
+    } else {
+      tapResetTimeoutRef.current = setTimeout(() => {
+        resetTapSequence();
+      }, SEEK_DEBOUNCE_MS);
+    }
   };
 
-  const StepBac = () => {
-    setStep(step - 1);
+  const handleTapRight = () => {
+    if (lastTapDirRef.current && lastTapDirRef.current !== 'right') {
+      cancelPendingSeek();
+      resetTapSequence();
+    }
+    lastTapDirRef.current = 'right';
+    tapCountRef.current += 1;
+    if (tapResetTimeoutRef.current) {
+      clearTimeout(tapResetTimeoutRef.current);
+      tapResetTimeoutRef.current = null;
+    }
+
+    if (seekOffsetSeconds === 0) {
+      if (opacity.value === 0) {
+        showControls();
+      } else {
+        opacity.value = withTiming(0);
+      }
+    } else {
+      if (opacity.value !== 0) {
+        opacity.value = withTiming(0);
+      }
+    }
+    if (tapCountRef.current >= 2) {
+      enqueueSeek(SEEK_STEP_SECONDS);
+    } else {
+      tapResetTimeoutRef.current = setTimeout(() => {
+        resetTapSequence();
+      }, SEEK_DEBOUNCE_MS);
+    }
   };
 
   const doubleTapLeft = Gesture.Tap()
-    .numberOfTaps(-1)
-    .onTouchesUp(() => {
-      if (step === 0) {
-        if (opacity.value === 0) {
-          scheduleOnRN(showControls);
-        } else {
-          opacity.value = withTiming(0);
-        }
-      } else {
-        if (opacity.value !== 0) {
-          opacity.value = withTiming(0);
-        }
-      }
-      scheduleOnRN(StepBac);
-    })
-    .onFinalize(() => {
-      scheduleOnRN(handleDoubleTap);
+    .onEnd(() => {
+      scheduleOnRN(handleTapLeft);
     });
 
   const doubleTapRight = Gesture.Tap()
-    .numberOfTaps(-1)
-    .onTouchesUp(() => {
-      if (step === 0) {
-        if (opacity.value === 0) {
-          scheduleOnRN(showControls);
-        } else {
-          opacity.value = withTiming(0);
-        }
+    .onEnd(() => {
+      scheduleOnRN(handleTapRight);
+    });
+
+  // Жесты
+  const singleTap = Gesture.Tap()
+    .onEnd(() => {
+      // Переключаем видимость контролов или ставим паузу
+      if (opacity.value === 0) {
+        scheduleOnRN(showControls);
       } else {
-        if (opacity.value !== 0) {
-          opacity.value = withTiming(0);
-        }
+        // Если контролы видны, тап по пустому месту может их скрыть
+        opacity.value = withTiming(0);
       }
-      scheduleOnRN(StepFor);
-    })
-    .onFinalize(() => {
-      scheduleOnRN(handleDoubleTap);
     });
 
   // Стили для анимации контролов
   const animatedControlsStyle = useAnimatedStyle(() => ({
-    opacity: opacity.value,
+    opacity: seekOffsetSeconds !== 0 ? 0 : opacity.value,
   }));
 
   const animatedSettingsOverlayStyle = useAnimatedStyle(() => ({
@@ -286,10 +333,10 @@ const VideoPlayer = ({
 
   // --- РЕНДЕР ВИЗУАЛИЗАЦИИ ПЕРЕМОТКИ ---
   const renderSeekOverlay = () => {
-    if (step === 0 || step === 1 || step === -1) return null;
+    if (seekOffsetSeconds === 0) return null;
 
-    const isRewind = step < 0;
-    const seconds = Math.abs(step) * 10 - 10;
+    const isRewind = seekOffsetSeconds < 0;
+    const seconds = Math.abs(seekOffsetSeconds);
 
     return (
       <View style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -387,7 +434,7 @@ const VideoPlayer = ({
         {/* Оверлей с контролами (UI) */}
         <Animated.View
           style={[styles.controlsOverlay, animatedControlsStyle]}
-          pointerEvents="box-none"
+          pointerEvents={seekOffsetSeconds !== 0 ? 'none' : 'box-none'}
         >
           {isBuffering && (
             <View style={styles.centerControl}>
