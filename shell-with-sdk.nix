@@ -1,13 +1,20 @@
-{pkgs ? import <nixpkgs> {
-  config = {
-    android_sdk.accept_license = true;
-    allowUnfree = true;
-  };
-}, ...}: let
+{
+  pkgs ? import <nixpkgs> {
+    config = {
+      android_sdk.accept_license = true;
+      allowUnfree = true;
+    };
+  },
+  ...
+}:
+let
   androidComposition = pkgs.androidenv.composeAndroidPackages {
     toolsVersion = "26.1.1";
     platformToolsVersion = "36.0.2";
-    buildToolsVersions = [ "35.0.0" "36.0.0" ];
+    buildToolsVersions = [
+      "35.0.0"
+      "36.0.0"
+    ];
 
     includeEmulator = true;
     emulatorVersion = "34.2.11";
@@ -17,11 +24,16 @@
     # For example below
     # system-images;android-27;default;x86_64
     # system-images;android-34;default;x86_64
-    platformVersions = ["27" "33" "34" "36"];
-    abiVersions = ["x86_64"];
-    systemImageTypes = ["google_apis_playstore"];
+    platformVersions = [
+      "27"
+      "33"
+      "34"
+      "36"
+    ];
+    abiVersions = [ "x86_64" ];
+    systemImageTypes = [ "google_apis_playstore" ];
 
-    includeSources = false; 
+    includeSources = false;
     includeNDK = true;
     useGoogleAPIs = false;
 
@@ -65,7 +77,8 @@ pkgs.mkShell {
     androidSdk
     react-native-debugger
     jdk17
-    (callPackage ({ pkgs, ... }:
+    (callPackage (
+      { pkgs, ... }:
       pkgs.androidenv.emulateApp rec {
         name = "android-emu-default-api34-x86_64";
         deviceName = name;
@@ -76,14 +89,23 @@ pkgs.mkShell {
           emulatorVersion = "34.2.11";
         };
         configOptions = {
-          "hw.device.name" = "pixel_8";
-          # "hw.gpu.enabled" = "yes";
-          # "hw.gpu.mode" = "host";
+          "hw.gpu.enabled" = "yes";
+          "hw.gpu.mode" = "host";
           "hw.keyboard" = "yes";
+          "hw.device.manufacturer" = "Google";
+          "hw.device.model" = "Pixel 8";
+          "hw.lcd.width" = "1080";
+          "hw.lcd.height" = "2400";
+          "hw.lcd.density" = "428";
+          "hw.lcd.refresh" = "120";
+          "hw.cpu.ncore" = "8";
+          "hw.ramSize" = "8192";
+          "vm.heapSize" = "256";
         };
         avdHomeDir = "$HOME/.android/avd";
         # androidAvdFlags = "--device 42";
-      }) {})
+      }
+    ) { })
   ];
   shellHook = ''
     export ANDROID_HOME="${androidSdk}/libexec/android-sdk"
@@ -94,5 +116,7 @@ pkgs.mkShell {
     # On wayland may not work correctly without this
     export QT_QPA_PLATFORM="xcb"
     # Fix some kind of errors with vulkan
+    export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib":$LD_LIBRARY_PATH
+    alias run-test-emulator="__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __VK_LAYER_NV_optimus=NVIDIA_only run-test-emulator"
   '';
 }
