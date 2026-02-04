@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Orientation from 'react-native-orientation-locker';
 import ImmersiveMode from 'react-native-immersive-mode';
 import { Dimensions, StyleSheet, View } from 'react-native';
 import VideoPlayer from '../components/custom/geminiPlayer';
 import { useAnimeStore } from '../stores/animeStore';
+import { useWatchProgressStore } from '../stores/watchProgressStore';
 import { Anime } from '../services/api/source/Yumme_anime_ru';
 import { StaticScreenProps, useNavigation } from '@react-navigation/native';
 import { DrawerActions } from '@react-navigation/native';
@@ -21,15 +22,23 @@ export default function VideoPlayerScreen({
   const navigation = useNavigation();
   const [full, setFull] = useState<Anime | null>(null);
   const [screenSize, setScreenSize] = useState(Dimensions.get('screen'));
+  const didApplyStoredSelectionRef = useRef(false);
   
   // Состояние для выбранных индексов
   const [selectedPlayerIndex, setSelectedPlayerIndex] = useState(0);
   const [selectedDubberIndex, setSelectedDubberIndex] = useState(0);
   const [selectedEpisodeIndex, setSelectedEpisodeIndex] = useState(0);
   const [seekBehavior, setSeekBehavior] = useState<'reset' | 'back10'>('reset');
+
+  const animeId = id?.toString();
+  const progressEntry = useWatchProgressStore(state =>
+    animeId ? state.progressMap[animeId] : undefined
+  );
+  const setProgress = useWatchProgressStore(state => state.setProgress);
   
   // Текущее выбранное видео
   const currentVideo = full?.players[selectedPlayerIndex]?.dubbers[selectedDubberIndex]?.episodes[selectedEpisodeIndex];
+  const currentDubber = full?.players[selectedPlayerIndex]?.dubbers[selectedDubberIndex];
 
   // Функции для VideoPlayer
   const openDrawer = () => {
@@ -57,7 +66,7 @@ export default function VideoPlayerScreen({
       selectedEpisodeIndex?: number;
       changeReason?: 'player' | 'dubber' | 'episode';
     } | undefined;
-    
+
     if (params) {
       if (params.selectedPlayerIndex !== undefined) {
         setSelectedPlayerIndex(params.selectedPlayerIndex);
@@ -73,6 +82,41 @@ export default function VideoPlayerScreen({
       }
     }
   }, [route.params]);
+
+  useEffect(() => {
+    if (!full || !progressEntry) return;
+    if (didApplyStoredSelectionRef.current) return;
+    const params = route.params as {
+      selectedPlayerIndex?: number;
+      selectedDubberIndex?: number;
+      selectedEpisodeIndex?: number;
+    } | undefined;
+    const hasExplicitSelection =
+      params?.selectedPlayerIndex !== undefined ||
+      params?.selectedDubberIndex !== undefined ||
+      params?.selectedEpisodeIndex !== undefined;
+    if (hasExplicitSelection) return;
+
+    const targetDubberId = progressEntry.dubberId;
+    const targetEpisodeId = progressEntry.episodeId;
+    for (let p = 0; p < full.players.length; p += 1) {
+      const dubbers = full.players[p].dubbers;
+      for (let d = 0; d < dubbers.length; d += 1) {
+        if (dubbers[d].dubbing !== targetDubberId) continue;
+        const episodes = dubbers[d].episodes;
+        const episodeIndex = episodes.findIndex(
+          episode => String(episode.video.number) === targetEpisodeId
+        );
+        if (episodeIndex === -1) continue;
+        setSelectedPlayerIndex(p);
+        setSelectedDubberIndex(d);
+        setSelectedEpisodeIndex(episodeIndex);
+        setSeekBehavior('reset');
+        didApplyStoredSelectionRef.current = true;
+        return;
+      }
+    }
+  }, [full, progressEntry, route.params]);
 
   const openDubber = () => {
     // Открыть drawer для выбора озвучки
@@ -124,6 +168,26 @@ export default function VideoPlayerScreen({
     return () => subscription?.remove();
   }, []);
 
+  const initialTimeSeconds =
+    progressEntry &&
+    currentDubber &&
+    currentVideo &&
+    progressEntry.dubberId === currentDubber.dubbing &&
+    progressEntry.episodeId === String(currentVideo.video.number)
+      ? progressEntry.positionSeconds
+      : 0;
+
+  const handleProgressUpdate = (seconds: number) => {
+    if (!animeId || !currentVideo || !currentDubber) return;
+    setProgress({
+      animeId,
+      dubberId: currentDubber.dubbing,
+      episodeId: String(currentVideo.video.number),
+      positionSeconds: seconds,
+      updatedAt: Date.now(),
+    });
+  };
+
   return (
     <View style={[styles.container, { height: screenSize.height }]}>
       <VideoPlayer 
@@ -132,6 +196,8 @@ export default function VideoPlayerScreen({
         openPlayer={openPlayer}
         openEpisode={openEpisode}
         seekBehavior={seekBehavior}
+        initialTimeSeconds={initialTimeSeconds}
+        onProgressUpdate={handleProgressUpdate}
       />
     </View>
   );

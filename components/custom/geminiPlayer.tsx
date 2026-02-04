@@ -29,6 +29,7 @@ import Animated, {
 import { scheduleOnRN } from 'react-native-worklets';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { usePlayerSettingsStore } from '../../stores/playerSettingsStore';
 
 // Хелпер для форматирования времени (MM:SS)
 const formatTime = (seconds: number) => {
@@ -43,6 +44,8 @@ type VideoPlayerProps = {
   openEpisode: () => void;
   video: VideoType | undefined;
   seekBehavior: 'reset' | 'back10';
+  initialTimeSeconds?: number;
+  onProgressUpdate?: (seconds: number) => void;
 };
 const VideoPlayer = ({
   openDubber,
@@ -50,6 +53,8 @@ const VideoPlayer = ({
   openEpisode,
   video,
   seekBehavior,
+  initialTimeSeconds = 0,
+  onProgressUpdate,
 }: VideoPlayerProps) => {
   const videoRef = useRef<VideoRef>(null);
   const navigation = useNavigation();
@@ -71,7 +76,8 @@ const VideoPlayer = ({
   const [selectedQualityUrl, setSelectedQualityUrl] = useState<string | null>(
     null
   );
-  const [playbackRate, setPlaybackRate] = useState(1);
+  const playbackRate = usePlayerSettingsStore(state => state.playbackRate);
+  const setPlaybackRate = usePlayerSettingsStore(state => state.setPlaybackRate);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<
     'main' | 'speed' | 'quality'
@@ -84,6 +90,11 @@ const VideoPlayer = ({
   const tapResetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tapCountRef = useRef(0);
   const lastTapDirRef = useRef<'left' | 'right' | null>(null);
+  const lastProgressSaveAtRef = useRef(0);
+  const lastProgressSavedRef = useRef(0);
+  const progressUpdateRef = useRef<((seconds: number) => void) | undefined>(
+    onProgressUpdate
+  );
 
   const SEEK_STEP_SECONDS = 10;
   const SEEK_DEBOUNCE_MS = 300;
@@ -123,6 +134,16 @@ const VideoPlayer = ({
     if (!video) return;
     pendingSeekRef.current = seekBehavior;
   }, [video, seekBehavior]);
+
+  useEffect(() => {
+    progressUpdateRef.current = onProgressUpdate;
+  }, [onProgressUpdate]);
+
+  useEffect(() => {
+    if (!video) return;
+    if (!initialTimeSeconds || initialTimeSeconds <= 0) return;
+    pendingSeekTimeRef.current = initialTimeSeconds;
+  }, [video, initialTimeSeconds]);
 
   useEffect(() => {
     console.log(url);
@@ -180,6 +201,24 @@ const VideoPlayer = ({
     };
   }, [paused]);
 
+  useEffect(() => {
+    const update = progressUpdateRef.current;
+    if (paused && update && lastProgressRef.current > 0) {
+      lastProgressSaveAtRef.current = Date.now();
+      lastProgressSavedRef.current = lastProgressRef.current;
+      update(lastProgressRef.current);
+    }
+  }, [paused]);
+
+  useEffect(() => {
+    return () => {
+      const update = progressUpdateRef.current;
+      if (update && lastProgressRef.current > 0) {
+        update(lastProgressRef.current);
+      }
+    };
+  }, []);
+
   const resetTapSequence = () => {
     tapCountRef.current = 0;
     lastTapDirRef.current = null;
@@ -212,6 +251,7 @@ const VideoPlayer = ({
       ...prev,
       currentTime: newTime,
     }));
+    saveProgressNow(newTime);
     seekAccumulatorRef.current = 0;
     setSeekOffsetSeconds(0);
     resetTapSequence();
@@ -227,6 +267,29 @@ const VideoPlayer = ({
       commitSeek();
     }, SEEK_DEBOUNCE_MS);
   };
+
+  const maybeSaveProgress = (currentTime: number) => {
+    const update = progressUpdateRef.current;
+    if (!update) return;
+    const now = Date.now();
+    if (
+      now - lastProgressSaveAtRef.current < 10000 &&
+      Math.abs(currentTime - lastProgressSavedRef.current) < 1
+    ) {
+      return;
+    }
+    lastProgressSaveAtRef.current = now;
+    lastProgressSavedRef.current = currentTime;
+    update(currentTime);
+  };
+
+  function saveProgressNow(currentTime: number) {
+    const update = progressUpdateRef.current;
+    if (!update) return;
+    lastProgressSaveAtRef.current = Date.now();
+    lastProgressSavedRef.current = currentTime;
+    update(currentTime);
+  }
 
   const handleTapLeft = () => {
     if (lastTapDirRef.current && lastTapDirRef.current !== 'left') {
@@ -404,7 +467,10 @@ const VideoPlayer = ({
             }}
             onProgress={data => {
               lastProgressRef.current = data.currentTime;
-              if (!isSeeking) setProgress(data);
+              if (!isSeeking) {
+                setProgress(data);
+                maybeSaveProgress(data.currentTime);
+              }
             }}
             onBuffer={({ isBuffering }) => setIsBuffering(isBuffering)}
             onEnd={() => setPaused(true)}
@@ -486,6 +552,7 @@ const VideoPlayer = ({
                   videoRef.current?.seek(val);
                   setIsSeeking(false);
                   showControls();
+                  saveProgressNow(val);
                 }}
               />
 

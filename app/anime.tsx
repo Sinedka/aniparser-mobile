@@ -1,6 +1,6 @@
 import { StaticScreenProps, useNavigation } from '@react-navigation/native';
 import { useEffect, useState } from 'react';
-import { Image, ScrollView, StyleSheet } from 'react-native';
+import { ActivityIndicator, Image, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AutoText } from '../components/auto-text';
 import { DescriptionBlock } from '../components/custom/description';
@@ -10,10 +10,14 @@ import { ThemedText } from '../components/themed-text';
 import { ThemedView } from '../components/themed-view';
 import { Anime } from '../services/api/source/Yumme_anime_ru';
 import { useAnimeStore } from '../stores/animeStore';
+import { useWatchProgressStore } from '../stores/watchProgressStore';
 
 export default function AnimePage({ route }: StaticScreenProps<{ id: Number }>) {
   const { id } = route.params;
   const animeMin = useAnimeStore(s => (id ? s.animeMinMap[id.toString()] : undefined));
+  const progressEntry = useWatchProgressStore(s =>
+    id ? s.progressMap[id.toString()] : undefined
+  );
 
   const [full, setFull] = useState<Anime | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -199,14 +203,19 @@ export default function AnimePage({ route }: StaticScreenProps<{ id: Number }>) 
                 fontWeight: 'bold',
               }}
             >
-              начать просмотр
+              {progressEntry
+                ? `продолжить с ${progressEntry.episodeId} серии`
+                : 'начать просмотр'}
             </ThemedText>
           </ThemedPressable>
         </ThemedView>
 
-        {full && (
-          <DescriptionBlock>{full.animeResult.description}</DescriptionBlock>
+        {!full && (
+          <ThemedView style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#fff" />
+          </ThemedView>
         )}
+        {full && <DescriptionBlock>{full.animeResult.description}</DescriptionBlock>}
       </ScrollView>
     </SafeAreaView>
   );
@@ -226,6 +235,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#1ED760',
+  },
+  loadingContainer: {
+    paddingVertical: 16,
+    alignItems: 'center',
   },
   backButton: {
     marginRight: 10,
