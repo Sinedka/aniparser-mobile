@@ -13,22 +13,12 @@ interface KodikAPIPayload {
   type: string;
   hash: string;
   id: string;
-}
-
-interface KodikUrlParams {
-  d: string;
-  d_sign: string;
-  pd: string;
-  pd_sign: string;
-  ref: string;
-  ref_sign: string;
-  advert_debug: boolean;
-  min_age: number;
-  first_url: boolean;
+  bad_user: boolean;
+  info: Record<string, unknown>;
+  cdn_is_working: boolean;
 }
 
 interface KodikPageResult {
-  urlParams: KodikUrlParams;
   apiPayload: KodikAPIPayload;
   playerJsPath: string;
 }
@@ -146,32 +136,39 @@ export class Kodik extends BaseVideoExtractor {
   }
 
   private extractApiPayload(text: string): KodikPageResult {
-    const d = /var\s*domain\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const d_sign = /var\s*d_sign\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const pd = /var\s*pd\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const pd_sign =
-      /var\s*pd_sign\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const ref = /var\s*ref\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const ref_sign =
-      /var\s*ref_sign\s+=\s+[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
+    const urlParamsRaw =
+      /var\s*urlParams\s*=\s*'([^']*)'/.exec(text)?.[1] || '';
+    let urlParams: Partial<KodikAPIPayload> = {};
+
+    if (urlParamsRaw) {
+      try {
+        urlParams = JSON.parse(urlParamsRaw);
+      } catch (e) {
+        console.warn('Kodik RN parse warn: invalid urlParams json', e);
+      }
+    }
+
     const type =
-      /videoInfo\.type\s*=\s*[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const hash =
-      /videoInfo\.hash\s*=\s*[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
-    const id = /videoInfo\.id\s*=\s*[\'\"](.*?)[\'\"]/.exec(text)?.[1] || '';
+      /var\s*type\s*=\s*['"](.*?)['"]/.exec(text)?.[1] ||
+      /vInfo\.type\s*=\s*['"](.*?)['"]/.exec(text)?.[1] ||
+      '';
+    const hash = /vInfo\.hash\s*=\s*['"](.*?)['"]/.exec(text)?.[1] || '';
+    const id =
+      /vInfo\.id\s*=\s*['"](.*?)['"]/.exec(text)?.[1] ||
+      /var\s*videoId\s*=\s*['"](.*?)['"]/.exec(text)?.[1] ||
+      '';
 
     const playerJsPath =
       /<script.*?src="(\/assets\/js\/app\..*?)"/.exec(text)?.[1] || '';
 
     return {
-      urlParams: {} as KodikUrlParams,
       apiPayload: {
-        d,
-        d_sign,
-        pd,
-        pd_sign,
-        ref,
-        ref_sign,
+        d: urlParams.d || '',
+        d_sign: urlParams.d_sign || '',
+        pd: urlParams.pd || '',
+        pd_sign: urlParams.pd_sign || '',
+        ref: urlParams.ref || '',
+        ref_sign: urlParams.ref_sign || '',
         type,
         hash,
         id,
@@ -179,6 +176,19 @@ export class Kodik extends BaseVideoExtractor {
       },
       playerJsPath,
     };
+  }
+
+  private hasRequiredPayloadFields(payload: KodikAPIPayload): boolean {
+    return Boolean(
+      payload.d &&
+        payload.d_sign &&
+        payload.pd &&
+        payload.pd_sign &&
+        payload.ref_sign &&
+        payload.type &&
+        payload.hash &&
+        payload.id,
+    );
   }
 
   private extract(links: Record<string, any>): Video[] {
@@ -203,17 +213,37 @@ export class Kodik extends BaseVideoExtractor {
       const pageRes = await this.fetchGet(url);
       const pageText = await pageRes.text();
 
-      if (this.isUnhandledErrorResponse(pageRes, pageText)) return [];
-      if (this.isNotFoundedVideo(pageText)) return [];
+      if (this.isUnhandledErrorResponse(pageRes, pageText)) {
+        console.warn('Kodik RN parse warn: unhandled error response');
+        return [];
+      }
+      if (this.isNotFoundedVideo(pageText)) {
+        console.warn('Kodik RN parse warn: video not found');
+        return [];
+      }
 
       const { apiPayload, playerJsPath } = this.extractApiPayload(pageText);
+
+      if (!this.hasRequiredPayloadFields(apiPayload)) {
+        console.warn('Kodik RN parse warn: missing api payload fields');
+        return [];
+      }
 
       const netloc = this.getNetloc(url);
 
       if (!Kodik.CACHED_API_PATH) {
+        if (!playerJsPath) {
+          console.warn('Kodik RN parse warn: missing player js path');
+          return [];
+        }
         const jsRes = await this.fetchGet(`https://${netloc}${playerJsPath}`);
         const jsText = await jsRes.text();
         this.updateApiPath(jsText);
+      }
+
+      if (!Kodik.CACHED_API_PATH) {
+        console.warn('Kodik RN parse warn: missing api path');
+        return [];
       }
 
       const apiUrl = this.createUrlApi(netloc, Kodik.CACHED_API_PATH || '');
@@ -226,6 +256,11 @@ export class Kodik extends BaseVideoExtractor {
 
       const apiText = await apiRes.text();
       const apiJson = JSON.parse(apiText);
+
+      if (!apiJson?.links) {
+        console.warn('Kodik RN parse warn: missing links in api response');
+        return [];
+      }
 
       return this.extract(apiJson.links);
     } catch (e) {
