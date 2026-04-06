@@ -26,15 +26,11 @@ copy_apk() {
 
 case "$target" in
   apk)
-    cd android
-    ./gradlew assembleRelease
-    cd ..
+    ./android/gradlew assembleRelease
     copy_apk "android/app/build/outputs/apk/release/app-release.apk"
     ;;
   apk-debug)
-    cd android
-    ./gradlew assembleDebug
-    cd ..
+    ./android/gradlew assembleDebug
     copy_apk "android/app/build/outputs/apk/debug/app-debug.apk"
     ;;
   *)

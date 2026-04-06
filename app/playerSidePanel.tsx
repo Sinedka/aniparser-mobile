@@ -1,12 +1,14 @@
 import type { DrawerContentComponentProps } from '@react-navigation/drawer';
 import { DrawerActions } from '@react-navigation/native';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 import { useAnimeStore } from '../stores/animeStore';
 import { Anime } from '../services/api/source/Yumme_anime_ru';
 import { ThemedView } from '../components/themed-view';
 import { ThemedText } from '../components/themed-text';
 import { ThemedPressable } from '../components/themd-pressable';
+import { useWatchProgressStore } from '../stores/watchProgressStore';
+import { usePlayerPanelStore } from '../stores/playerPanelStore';
 
 type PanelView = 'player' | 'dubber' | 'episode';
 
@@ -17,18 +19,9 @@ export default function PlayerSidePanel({
   const playerRoute = state.routes.find(route => route.name === 'Player');
   const routeParams = (playerRoute?.params ?? {}) as {
     id?: Number;
-    view?: PanelView;
-    selectedPlayerIndex?: number;
-    selectedDubberIndex?: number;
-    selectedEpisodeIndex?: number;
-    changeReason?: PanelView;
   };
   let { 
     id: paramId, 
-    view = 'player',
-    selectedPlayerIndex = 0,
-    selectedDubberIndex = 0,
-    selectedEpisodeIndex = 0,
   } = routeParams;
   
   // Если id не передан в параметрах, пытаемся получить из родительского route
@@ -43,18 +36,19 @@ export default function PlayerSidePanel({
   
   const id = paramId;
   const [full, setFull] = useState<Anime | null>(null);
-  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(selectedPlayerIndex);
-  const [currentDubberIndex, setCurrentDubberIndex] = useState(selectedDubberIndex);
-  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(selectedEpisodeIndex);
+  const [currentPlayerIndex, setCurrentPlayerIndex] = useState(0);
+  const [currentDubberIndex, setCurrentDubberIndex] = useState(0);
+  const [currentEpisodeIndex, setCurrentEpisodeIndex] = useState(0);
+  const progressEntry = useWatchProgressStore(state =>
+    id ? state.progressMap[id.toString()] : undefined
+  );
+  const setProgress = useWatchProgressStore(state => state.setProgress);
+  const view = usePlayerPanelStore(state => state.panelView);
+  const setPanelView = usePlayerPanelStore(state => state.setPanelView);
+  const lastProgressKeyRef = useRef<string | null>(null);
 
-  const setPanelView = (nextView: PanelView) => {
-    (navigation as any).navigate('Player', {
-      id,
-      view: nextView,
-      selectedPlayerIndex: currentPlayerIndex,
-      selectedDubberIndex: currentDubberIndex,
-      selectedEpisodeIndex: currentEpisodeIndex,
-    });
+  const setPanelViewLocal = (nextView: PanelView) => {
+    setPanelView(nextView);
     navigation.dispatch(DrawerActions.openDrawer());
   };
 
@@ -69,10 +63,6 @@ export default function PlayerSidePanel({
       .then(data => {
         if (!cancelled) {
           setFull(data);
-          // Обновляем индексы при загрузке данных
-          setCurrentPlayerIndex(selectedPlayerIndex);
-          setCurrentDubberIndex(selectedDubberIndex);
-          setCurrentEpisodeIndex(selectedEpisodeIndex);
         }
       })
       .catch(e => console.error(e.message));
@@ -80,14 +70,30 @@ export default function PlayerSidePanel({
     return () => {
       cancelled = true;
     };
-  }, [id, selectedPlayerIndex, selectedDubberIndex, selectedEpisodeIndex]);
-  
-  // Обновляем индексы при изменении параметров
+  }, [id]);
+
   useEffect(() => {
-    setCurrentPlayerIndex(selectedPlayerIndex);
-    setCurrentDubberIndex(selectedDubberIndex);
-    setCurrentEpisodeIndex(selectedEpisodeIndex);
-  }, [selectedPlayerIndex, selectedDubberIndex, selectedEpisodeIndex]);
+    if (!full || !progressEntry) return;
+    const progressKey = `${progressEntry.dubberId}:${progressEntry.episodeId}`;
+    if (lastProgressKeyRef.current === progressKey) return;
+
+    for (let p = 0; p < full.players.length; p += 1) {
+      const dubbers = full.players[p].dubbers;
+      for (let d = 0; d < dubbers.length; d += 1) {
+        if (dubbers[d].dubbing !== progressEntry.dubberId) continue;
+        const episodes = dubbers[d].episodes;
+        const episodeIndex = episodes.findIndex(
+          episode => String(episode.video.number) === progressEntry.episodeId
+        );
+        if (episodeIndex === -1) continue;
+        setCurrentPlayerIndex(p);
+        setCurrentDubberIndex(d);
+        setCurrentEpisodeIndex(episodeIndex);
+        lastProgressKeyRef.current = progressKey;
+        return;
+      }
+    }
+  }, [full, progressEntry]);
 
   // Функция для обновления выбора и уведомления Player экрана
   const updateSelection = (
@@ -102,25 +108,25 @@ export default function PlayerSidePanel({
       playerIndex !== undefined ? 'dubber'
       : dubberIndex !== undefined ? 'episode'
       : view;
-    const changeReason: PanelView | undefined =
-      playerIndex !== undefined ? 'player'
-      : dubberIndex !== undefined ? 'dubber'
-      : episodeIndex !== undefined ? 'episode'
-      : undefined;
-    
     setCurrentPlayerIndex(newPlayerIndex);
     setCurrentDubberIndex(newDubberIndex);
     setCurrentEpisodeIndex(newEpisodeIndex);
-    
-    // navigation уже является drawer навигацией; обновляем параметры Player route
-    (navigation as any).navigate('Player', {
-      id,
-      view: nextView,
-      selectedPlayerIndex: newPlayerIndex,
-      selectedDubberIndex: newDubberIndex,
-      selectedEpisodeIndex: newEpisodeIndex,
-      changeReason,
+
+    if (!id || !full) return;
+    const targetDubber = full.players[newPlayerIndex]?.dubbers[newDubberIndex];
+    const targetEpisode = targetDubber?.episodes?.[newEpisodeIndex];
+    if (!targetDubber || !targetEpisode) return;
+
+    setProgress({
+      animeId: id.toString(),
+      dubberId: targetDubber.dubbing,
+      episodeId: String(targetEpisode.video.number),
+      positionSeconds: 0,
+      updatedAt: Date.now(),
     });
+
+    setPanelView(nextView);
+    navigation.dispatch(DrawerActions.closeDrawer());
   };
   
   // Рендер списка плееров
@@ -218,19 +224,19 @@ export default function PlayerSidePanel({
       <ThemedView style={styles.tabs}>
         <ThemedPressable
           style={[styles.tab, view === 'player' && styles.activeTab]}
-          onPress={() => setPanelView('player')}
+          onPress={() => setPanelViewLocal('player')}
         >
           <ThemedText style={styles.tabText}>Плеер</ThemedText>
         </ThemedPressable>
         <ThemedPressable
           style={[styles.tab, view === 'dubber' && styles.activeTab]}
-          onPress={() => setPanelView('dubber')}
+          onPress={() => setPanelViewLocal('dubber')}
         >
           <ThemedText style={styles.tabText}>Озвучка</ThemedText>
         </ThemedPressable>
         <ThemedPressable
           style={[styles.tab, view === 'episode' && styles.activeTab]}
-          onPress={() => setPanelView('episode')}
+          onPress={() => setPanelViewLocal('episode')}
         >
           <ThemedText style={styles.tabText}>Эпизод</ThemedText>
         </ThemedPressable>

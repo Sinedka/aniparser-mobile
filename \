@@ -1,0 +1,140 @@
+import React, { useMemo } from "react";
+import Animated, {
+  cancelAnimation,
+  runOnJS,
+  useAnimatedReaction,
+  useSharedValue,
+  withDelay,
+  withTiming,
+} from "react-native-reanimated";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { ViewStyle } from "react-native";
+
+type Props = {
+  streakIntervalMs?: number; // между тапами для продолжения стрика
+  holdDelayMs?: number;      // через сколько считать "удержание"
+
+  // (1) первый press-in (down) нового стрика
+  onFirstPressIn?: () => void;
+
+  // (2) один раз при старте удержания, если стрик ещё не начался
+  onHoldWithoutStreak?: () => void;
+
+  // (3) быстрые повторные нажатия, count=2,3,4...
+  onStreakPress?: (count: number) => void;
+
+  // (4) стрик сбился
+  onStreakBroken?: (lastCount: number) => void;
+
+  style?: ViewStyle;
+  children?: React.ReactNode;
+};
+
+export function NativeStreakPressable({
+  streakIntervalMs = 300,
+  holdDelayMs = 350,
+  onFirstPressIn,
+  onHoldWithoutStreak,
+  onStreakPress,
+  onStreakBroken,
+  style,
+  children,
+}: Props) {
+  const lastDownTs = useSharedValue<number>(0);
+  const count = useSharedValue<number>(0);
+
+  // чтобы дернуть JS-колбэк "broken"
+  const brokenCount = useSharedValue<number>(0);
+
+  // UI-thread таймер "стрик сбился"
+  const breakTimer = useSharedValue<number>(0);
+
+  // флаг "удержание уже сработало для текущего касания"
+  const holdFiredThisTouch = useSharedValue<boolean>(false);
+
+  const scheduleBreak = (currentCount: number) => {
+    "worklet";
+    cancelAnimation(breakTimer);
+    breakTimer.value = 0;
+    breakTimer.value = withDelay(
+      streakIntervalMs,
+      withTiming(1, { duration: 1 }, (finished) => {
+        if (finished) {
+          brokenCount.value = currentCount;
+          count.value = 0;
+          lastDownTs.value = 0;
+        }
+      })
+    );
+  };
+
+  const touchLikeGesture = useMemo(() => {
+    // Pan(minDistance=0) — максимально близко к raw touch:
+    // onBegin = палец коснулся; onFinalize = отпустил/сброс
+    return Gesture.Pan()
+      .minDistance(0)
+      .onBegin(() => {
+        const now = Date.now();
+        holdFiredThisTouch.value = false;
+
+        const within =
+          lastDownTs.value !== 0 && now - lastDownTs.value <= streakIntervalMs;
+
+        if (!within) {
+          // новый стрик
+          count.value = 1;
+          lastDownTs.value = now;
+          if (onFirstPressIn) runOnJS(onFirstPressIn)();
+          scheduleBreak(1);
+          return;
+        }
+
+        // продолжение стрика
+        count.value = count.value + 1;
+        lastDownTs.value = now;
+        if (onStreakPress) runOnJS(onStreakPress)(count.value);
+        scheduleBreak(count.value);
+      })
+      .onFinalize(() => {
+        // отпустили/жест завершился — ничего особенного не надо,
+        // long-press управляется отдельным жестом
+      });
+  }, [onFirstPressIn, onStreakPress, streakIntervalMs]);
+
+  const longPress = useMemo(() => {
+    return Gesture.LongPress()
+      .minDuration(holdDelayMs)
+      .onStart(() => {
+        // (2) ровно один раз за касание
+        if (!holdFiredThisTouch.value && count.value < 2) {
+          holdFiredThisTouch.value = true;
+          if (onHoldWithoutStreak) runOnJS(onHoldWithoutStreak)();
+        }
+      })
+      .onFinalize(() => {
+        holdFiredThisTouch.value = false;
+      });
+  }, [holdDelayMs, onHoldWithoutStreak]);
+
+  const composed = useMemo(
+    () => Gesture.Simultaneous(touchLikeGesture, longPress),
+    [touchLikeGesture, longPress]
+  );
+
+  useAnimatedReaction(
+    () => brokenCount.value,
+    (val, prev) => {
+      if (val !== 0 && val !== prev) {
+        if (onStreakBroken) runOnJS(onStreakBroken)(val);
+        brokenCount.value = 0;
+      }
+    },
+    [onStreakBroken]
+  );
+
+  return (
+    <GestureDetector gesture={composed}>
+      <Animated.View style={style}>{children}</Animated.View>
+    </GestureDetector>
+  );
+}
