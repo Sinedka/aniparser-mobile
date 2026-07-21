@@ -17,7 +17,7 @@ let
     ];
 
     includeEmulator = true;
-    emulatorVersion = "34.2.11";
+    emulatorVersion = "36.4.2";
 
     includeSystemImages = true;
     # This generate cartesian product of defined image options
@@ -53,7 +53,7 @@ let
   };
   androidSdk = androidComposition.androidsdk;
 in
-pkgs.mkShell {
+pkgs.mkShell rec {
   buildInputs = with pkgs; [
     # You could use Android Studio with this devshell
     # But them reuse your ~/.config/Google/AndroidStudio* configuration
@@ -73,10 +73,13 @@ pkgs.mkShell {
     # You also can temporary configure overlayFS and use them
 
     # android-studio
+    libGLU
+    libGL
     dotslash
     androidSdk
     react-native-debugger
     jdk17
+    nodejs
     (callPackage (
       { pkgs, ... }:
       pkgs.androidenv.emulateApp rec {
@@ -86,7 +89,7 @@ pkgs.mkShell {
         abiVersion = "x86_64";
         systemImageType = "google_apis_playstore";
         sdkExtraArgs = {
-          emulatorVersion = "34.2.11";
+          emulatorVersion = "36.3.10";
         };
         configOptions = {
           "hw.gpu.enabled" = "yes";
@@ -94,13 +97,8 @@ pkgs.mkShell {
           "hw.keyboard" = "yes";
           "hw.device.manufacturer" = "Google";
           "hw.device.model" = "Pixel 8";
-          "hw.lcd.width" = "1080";
-          "hw.lcd.height" = "2400";
-          "hw.lcd.density" = "428";
-          "hw.lcd.refresh" = "120";
           "hw.cpu.ncore" = "8";
           "hw.ramSize" = "8192";
-          "vm.heapSize" = "256";
         };
         avdHomeDir = "$HOME/.android/avd";
         # androidAvdFlags = "--device 42";
@@ -115,8 +113,16 @@ pkgs.mkShell {
 
     # On wayland may not work correctly without this
     export QT_QPA_PLATFORM="xcb"
+    export VK_DRIVER_FILES=/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json
     # Fix some kind of errors with vulkan
     export LD_LIBRARY_PATH="${pkgs.libglvnd}/lib":$LD_LIBRARY_PATH
-    alias run-test-emulator="__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __VK_LAYER_NV_optimus=NVIDIA_only run-test-emulator"
+    # export VK_ICD_FILENAMES="/run/opengl-driver/share/vulkan/icd.d/nvidia_icd.json"
+    # export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath [ pkgs.vulkan-loader ]}"
+    # export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath buildInputs }"
+    # export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/run/opengl-driver/lib:/run/opengl-driver-32/lib"
+
+    # export __EGL_VENDOR_LIBRARY_FILENAMES=/run/opengl-driver/share/glvnd/egl_vendor.d/10_nvidia.json 
+
+    alias run-test-emulator="__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __NV_PRIME_RENDER_OFFLOAD_PROVIDER=NVIDIA-G0 __VK_LAYER_NV_optimus=NVIDIA_only run-test-emulator"
   '';
 }
